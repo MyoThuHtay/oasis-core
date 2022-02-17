@@ -258,6 +258,7 @@ pub fn verify(avr: &AVR) -> Result<AuthenticatedAVR> {
         | "CONFIGURATION_NEEDED"
         | "SW_HARDENING_NEEDED"
         | "CONFIGURATION_AND_SW_HARDENING_NEEDED" => {
+            println!("AVR: {:?}", avr_body);
             if !unsafe_lax_avr_verification {
                 return Err(AVRError::QuoteStatusInvalid {
                     status: quote_status.to_owned(),

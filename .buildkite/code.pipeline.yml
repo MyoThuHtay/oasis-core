@@ -303,7 +303,7 @@ steps:
   # E2E test - intel-sgx with IAS (only on master)
   ################################################
   - label: E2E tests - intel-sgx - IAS
-    branches: master stable/*
+    branches: master stable/* ptrus/test
     timeout_in_minutes: 15
     command:
       - .buildkite/scripts/sgx_ias_tests.sh
