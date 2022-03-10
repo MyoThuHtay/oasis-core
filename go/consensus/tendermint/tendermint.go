@@ -27,6 +27,9 @@ const (
 
 	// ModeSeed is the name of the seed-only node consensus mode.
 	ModeSeed = "seed"
+
+	// ModeArchive is the name of the archive-only node consensus mode.
+	ModeArchive = "archive"
 )
 
 // Flags has the configuration flags.
@@ -47,6 +50,9 @@ func New(
 	case ModeSeed:
 		// Seed-only node.
 		return seed.New(dataDir, identity, genesisProvider)
+	case ModeArchive:
+		// Archive mode.
+		return archive.New(ctx, dataDir, identity)
 	default:
 		return nil, fmt.Errorf("tendermint: unsupported mode: %s", mode)
 	}
