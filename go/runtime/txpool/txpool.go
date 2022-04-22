@@ -18,6 +18,7 @@ import (
 	consensus "github.com/oasisprotocol/oasis-core/go/consensus/api"
 	registry "github.com/oasisprotocol/oasis-core/go/registry/api"
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
+	"github.com/oasisprotocol/oasis-core/go/roothash/api/message"
 	"github.com/oasisprotocol/oasis-core/go/runtime/host"
 	"github.com/oasisprotocol/oasis-core/go/runtime/host/protocol"
 )
@@ -102,6 +103,9 @@ type TransactionPool interface {
 
 	// ProcessBlock updates the last known runtime block information.
 	ProcessBlock(bi *BlockInfo) error
+
+	// ProcessIncomingMessages uh
+	ProcessIncomingMessages(inMsgs []*message.IncomingMessage) error
 
 	// WakeupScheduler explicitly notifies subscribers that they should attempt scheduling.
 	WakeupScheduler()
@@ -374,6 +378,11 @@ func (t *txPool) ProcessBlock(bi *BlockInfo) error {
 		t.lastRecheckRound = bi.RuntimeBlock.Header.Round
 	}
 
+	return nil
+}
+
+func (t *txPool) ProcessIncomingMessages(inMsgs []*message.IncomingMessage) error {
+	t.rimQueue.Load(inMsgs)
 	return nil
 }
 
