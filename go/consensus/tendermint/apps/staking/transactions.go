@@ -40,19 +40,72 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 		return nil, nil
 	}
 
-	// Check if sender provided at least a minimum amount.
-	if xfer.Amount.Cmp(&params.MinTransferAmount) < 0 {
-		return nil, staking.ErrUnderMinTransferAmount
-	}
-
 	fromAddr := ctx.CallerAddress()
 	if fromAddr.IsReserved() || !isTransferPermitted(params, fromAddr) {
 		return nil, staking.ErrForbidden
 	}
 
+	var noEmitEvent bool
+	if xfer.To.Equal(staking.BurnAddress) {
+		// XXX/yawning: This *SHOULD* generate both burn and transfer
+		// events, but apparently we can only have one or the other.
+		//
+		// Favor the burn event so that indexers are less likely to
+		// get confused.
+		noEmitEvent = true
+		err = app.burnImpl(ctx, state, params, fromAddr, &xfer.Amount)
+	} else {
+		err = app.transferImpl(ctx, state, params, fromAddr, xfer)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	ctx.Logger().Debug("Transfer: executed transfer",
+		"from", fromAddr,
+		"to", xfer.To,
+		"amount", xfer.Amount,
+	)
+
+	if !noEmitEvent {
+		ctx.EmitEvent(api.NewEventBuilder(app.Name()).TypedAttribute(&staking.TransferEvent{
+			From:   fromAddr,
+			To:     xfer.To,
+			Amount: xfer.Amount,
+		}))
+	}
+
+	return &staking.TransferResult{
+		From:   fromAddr,
+		To:     xfer.To,
+		Amount: xfer.Amount,
+	}, nil
+}
+
+func (app *stakingApplication) transferImpl(
+	ctx *api.Context,
+	state *stakingState.MutableState,
+	params *staking.ConsensusParameters,
+	fromAddr staking.Address,
+	xfer *staking.Transfer,
+) error {
+	// Preconditions: Gas charged, fromAddr is valid
+	if ctx.IsCheckOnly() || ctx.IsSimulation() {
+		panic("BUG: transferImpl called for invalid ctx state")
+	}
+
+	// Check if sender provided at least a minimum amount.
+	if xfer.Amount.Cmp(&params.MinTransferAmount) < 0 {
+		return staking.ErrUnderMinTransferAmount
+	}
+
 	from, err := state.Account(ctx, fromAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch account: %w", err)
+		return fmt.Errorf("failed to fetch account: %w", err)
+	}
+
+	if xfer.To.Equal(staking.BurnAddress) {
+		panic("BUG: transferImpl - destination address is burn address")
 	}
 
 	if fromAddr.Equal(xfer.To) {
@@ -65,7 +118,7 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 				"to", xfer.To,
 				"amount", xfer.Amount,
 			)
-			return nil, err
+			return err
 		}
 	} else {
 		// Source and destination MUST be separate accounts with how
@@ -73,7 +126,7 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 		var to *staking.Account
 		to, err = state.Account(ctx, xfer.To)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch account: %w", err)
+			return fmt.Errorf("failed to fetch account: %w", err)
 		}
 		if err = quantity.Move(&to.General.Balance, &from.General.Balance, &xfer.Amount); err != nil {
 			ctx.Logger().Error("Transfer: failed to move balance",
@@ -82,7 +135,7 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 				"to", xfer.To,
 				"amount", xfer.Amount,
 			)
-			return nil, err
+			return err
 		}
 
 		// Check against minimum balance.
@@ -92,7 +145,7 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 				"account_balance", from.General.Balance,
 				"min_transact_balance", params.MinTransactBalance,
 			)
-			return nil, errors.WithContext(staking.ErrBalanceTooLow, "source account")
+			return errors.WithContext(staking.ErrBalanceTooLow, "source account")
 		}
 		if to.General.Balance.Cmp(&params.MinTransactBalance) < 0 {
 			ctx.Logger().Error("after transfer dest account balance too low",
@@ -100,35 +153,19 @@ func (app *stakingApplication) transfer(ctx *api.Context, state *stakingState.Mu
 				"account_balance", to.General.Balance,
 				"min_transact_balance", params.MinTransactBalance,
 			)
-			return nil, errors.WithContext(staking.ErrBalanceTooLow, "dest account")
+			return errors.WithContext(staking.ErrBalanceTooLow, "dest account")
 		}
 
 		if err = state.SetAccount(ctx, xfer.To, to); err != nil {
-			return nil, fmt.Errorf("failed to set account: %w", err)
+			return fmt.Errorf("failed to set account: %w", err)
 		}
 	}
 
 	if err = state.SetAccount(ctx, fromAddr, from); err != nil {
-		return nil, fmt.Errorf("failed to fetch account: %w", err)
+		return fmt.Errorf("failed to fetch account: %w", err)
 	}
 
-	ctx.Logger().Debug("Transfer: executed transfer",
-		"from", fromAddr,
-		"to", xfer.To,
-		"amount", xfer.Amount,
-	)
-
-	ctx.EmitEvent(api.NewEventBuilder(app.Name()).TypedAttribute(&staking.TransferEvent{
-		From:   fromAddr,
-		To:     xfer.To,
-		Amount: xfer.Amount,
-	}))
-
-	return &staking.TransferResult{
-		From:   fromAddr,
-		To:     xfer.To,
-		Amount: xfer.Amount,
-	}, nil
+	return nil
 }
 
 func (app *stakingApplication) burn(ctx *api.Context, state *stakingState.MutableState, burn *staking.Burn) error {
@@ -150,14 +187,29 @@ func (app *stakingApplication) burn(ctx *api.Context, state *stakingState.Mutabl
 		return nil
 	}
 
-	// Check if sender provided at least a minimum amount.
-	if burn.Amount.Cmp(&params.MinTransferAmount) < 0 {
-		return staking.ErrUnderMinTransferAmount
-	}
-
 	fromAddr := ctx.CallerAddress()
 	if fromAddr.IsReserved() {
 		return staking.ErrForbidden
+	}
+
+	return app.burnImpl(ctx, state, params, fromAddr, &burn.Amount)
+}
+
+func (app *stakingApplication) burnImpl(
+	ctx *api.Context,
+	state *stakingState.MutableState,
+	params *staking.ConsensusParameters,
+	fromAddr staking.Address,
+	amount *quantity.Quantity,
+) error {
+	// Preconditions: Gas charged, fromAddr is valid
+	if ctx.IsCheckOnly() || ctx.IsSimulation() {
+		panic("BUG: burnImpl called for invalid ctx state")
+	}
+
+	// Check if sender provided at least a minimum amount.
+	if amount.Cmp(&params.MinTransferAmount) < 0 {
+		return staking.ErrUnderMinTransferAmount
 	}
 
 	from, err := state.Account(ctx, fromAddr)
@@ -165,11 +217,11 @@ func (app *stakingApplication) burn(ctx *api.Context, state *stakingState.Mutabl
 		return fmt.Errorf("failed to fetch account: %w", err)
 	}
 
-	if err = from.General.Balance.Sub(&burn.Amount); err != nil {
+	if err = from.General.Balance.Sub(amount); err != nil {
 		ctx.Logger().Error("Burn: failed to burn stake",
 			"err", err,
 			"from", fromAddr,
-			"amount", burn.Amount,
+			"amount", amount,
 		)
 		return err
 	}
@@ -189,7 +241,7 @@ func (app *stakingApplication) burn(ctx *api.Context, state *stakingState.Mutabl
 		return fmt.Errorf("failed to fetch total supply: %w", err)
 	}
 
-	_ = totalSupply.Sub(&burn.Amount)
+	_ = totalSupply.Sub(amount)
 
 	if err = state.SetAccount(ctx, fromAddr, from); err != nil {
 		return fmt.Errorf("failed to set account: %w", err)
@@ -200,12 +252,12 @@ func (app *stakingApplication) burn(ctx *api.Context, state *stakingState.Mutabl
 
 	ctx.Logger().Debug("Burn: burnt stake",
 		"from", fromAddr,
-		"amount", burn.Amount,
+		"amount", *amount,
 	)
 
 	ctx.EmitEvent(api.NewEventBuilder(app.Name()).TypedAttribute(&staking.BurnEvent{
 		Owner:  fromAddr,
-		Amount: burn.Amount,
+		Amount: *amount,
 	}))
 
 	return nil

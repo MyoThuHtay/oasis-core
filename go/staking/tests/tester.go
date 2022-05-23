@@ -18,6 +18,7 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common/identity"
 	"github.com/oasisprotocol/oasis-core/go/common/quantity"
 	consensusAPI "github.com/oasisprotocol/oasis-core/go/consensus/api"
+	"github.com/oasisprotocol/oasis-core/go/consensus/api/transaction"
 	tendermintTests "github.com/oasisprotocol/oasis-core/go/consensus/tendermint/tests"
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
 	"github.com/oasisprotocol/oasis-core/go/staking/api"
@@ -572,62 +573,93 @@ func testBurn(t *testing.T, state *stakingTestsState, backend api.Backend, conse
 
 	accData := state.accounts.getAccount(1)
 
-	totalSupply, err := backend.TotalSupply(context.Background(), consensusAPI.HeightLatest)
-	require.NoError(err, "TotalSupply - before")
+	getAccount := func() *api.Account {
+		acc, err := backend.Account(context.Background(), &api.OwnerQuery{
+			Owner:  accData.Address,
+			Height: consensusAPI.HeightLatest,
+		})
+		require.NoError(err, "Account")
+		return acc
+	}
 
-	acc, err := backend.Account(context.Background(), &api.OwnerQuery{Owner: accData.Address, Height: consensusAPI.HeightLatest})
-	require.NoError(err, "src: Account")
+	doTestBurn := func(
+		account *api.Account,
+		amount quantity.Quantity,
+		tx *transaction.Transaction,
+	) {
+		totalSupply, err := backend.TotalSupply(context.Background(), consensusAPI.HeightLatest)
+		require.NoError(err, "TotalSupply - before")
 
-	ch, sub, err := backend.WatchEvents(context.Background())
-	require.NoError(err, "WatchEvents")
-	defer sub.Close()
+		ch, sub, err := backend.WatchEvents(context.Background())
+		require.NoError(err, "WatchEvents")
+		defer sub.Close()
 
-	amount := acc.General.Balance.Clone()
-	_ = amount.Quo(quantity.NewFromUint64(2))
+		err = consensusAPI.SignAndSubmitTx(context.Background(), consensus, accData.Signer, tx)
+		require.NoError(err, "SignAndSubmitTx")
+
+		select {
+		case ev := <-ch:
+			switch {
+			case ev.Burn != nil:
+				be := ev.Burn
+				require.Equal(accData.Address, be.Owner, "Event: owner")
+				require.Equal(amount, be.Amount, "Event: amount")
+
+				// Make sure that GetEvents also returns the burn event.
+				evts, grr := backend.GetEvents(context.Background(), consensusAPI.HeightLatest)
+				require.NoError(grr, "GetEvents")
+				var gotIt bool
+				for _, evt := range evts {
+					if evt.Burn != nil {
+						if evt.Burn.Owner.Equal(be.Owner) && evt.Burn.Amount.Cmp(&be.Amount) == 0 {
+							gotIt = true
+							break
+						}
+					}
+				}
+				require.EqualValues(true, gotIt, "GetEvents should return burn event")
+			default:
+				t.Fatalf("expected burn event, got: %+v", ev)
+			}
+		case <-time.After(recvTimeout):
+			t.Fatalf("failed to receive burn event")
+		}
+
+		_ = totalSupply.Sub(&amount)
+		newTotalSupply, err := backend.TotalSupply(context.Background(), consensusAPI.HeightLatest)
+		require.NoError(err, "TotalSupply - after")
+		require.Equal(totalSupply, newTotalSupply, "totalSupply is reduced by burn")
+
+		_ = account.General.Balance.Sub(&amount)
+		newSrcAcc := getAccount()
+		require.NoError(err, "src: Account")
+		require.Equal(account.General.Balance, newSrcAcc.General.Balance, "src: general balance - after")
+		require.EqualValues(tx.Nonce+1, newSrcAcc.General.Nonce, "src: nonce - after")
+	}
+
+	// Test burning the sensible way.
+	acc := getAccount()
+	amount := quantity.NewFromUint64(math.MaxUint8) // Whatevah.
 	burn := &api.Burn{
 		Amount: *amount,
 	}
-	tx := api.NewBurnTx(acc.General.Nonce, nil, burn)
-	err = consensusAPI.SignAndSubmitTx(context.Background(), consensus, accData.Signer, tx)
-	require.NoError(err, "Burn")
+	doTestBurn(
+		acc,
+		*amount,
+		api.NewBurnTx(acc.General.Nonce, nil, burn),
+	)
 
-	select {
-	case ev := <-ch:
-		if ev.Burn == nil {
-			t.Fatalf("expected burn event, got: %+v", ev)
-		}
-		be := ev.Burn
-
-		require.Equal(accData.Address, be.Owner, "Event: owner")
-		require.Equal(burn.Amount, be.Amount, "Event: amount")
-
-		// Make sure that GetEvents also returns the burn event.
-		evts, grr := backend.GetEvents(context.Background(), consensusAPI.HeightLatest)
-		require.NoError(grr, "GetEvents")
-		var gotIt bool
-		for _, evt := range evts {
-			if evt.Burn != nil {
-				if evt.Burn.Owner.Equal(be.Owner) && evt.Burn.Amount.Cmp(&be.Amount) == 0 {
-					gotIt = true
-					break
-				}
-			}
-		}
-		require.EqualValues(true, gotIt, "GetEvents should return burn event")
-	case <-time.After(recvTimeout):
-		t.Fatalf("failed to receive burn event")
+	// Test burning the shitcoin way.
+	acc = getAccount()
+	xfer := &api.Transfer{
+		To:     api.BurnAddress,
+		Amount: *amount,
 	}
-
-	_ = totalSupply.Sub(&burn.Amount)
-	newTotalSupply, err := backend.TotalSupply(context.Background(), consensusAPI.HeightLatest)
-	require.NoError(err, "TotalSupply - after")
-	require.Equal(totalSupply, newTotalSupply, "totalSupply is reduced by burn")
-
-	_ = acc.General.Balance.Sub(&burn.Amount)
-	newSrcAcc, err := backend.Account(context.Background(), &api.OwnerQuery{Owner: accData.Address, Height: consensusAPI.HeightLatest})
-	require.NoError(err, "src: Account")
-	require.Equal(acc.General.Balance, newSrcAcc.General.Balance, "src: general balance - after")
-	require.EqualValues(tx.Nonce+1, newSrcAcc.General.Nonce, "src: nonce - after")
+	doTestBurn(
+		acc,
+		*amount,
+		api.NewTransferTx(acc.General.Nonce, nil, xfer),
+	)
 }
 
 func testEscrow(t *testing.T, state *stakingTestsState, backend api.Backend, consensus consensusAPI.Backend) {
