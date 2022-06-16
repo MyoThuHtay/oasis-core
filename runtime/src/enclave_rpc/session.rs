@@ -9,7 +9,7 @@ use super::types::Message;
 use crate::{
     common::{
         crypto::signature::{PublicKey, Signature, Signer},
-        sgx::{ias, EnclaveIdentity},
+        sgx::{ias, EnclaveIdentity, Quote, VerifiedQuote},
     },
     rak::RAK,
 };
@@ -35,7 +35,7 @@ enum SessionError {
 /// Information about a session.
 pub struct SessionInfo {
     pub rak_binding: RAKBinding,
-    pub authenticated_avr: ias::AuthenticatedAVR,
+    pub verified_quote: VerifiedQuote,
 }
 
 enum State {
@@ -173,19 +173,27 @@ impl Session {
     fn get_rak_binding(&self) -> Vec<u8> {
         match self.rak {
             Some(ref rak) => {
-                if rak.public_key().is_none() || rak.avr().is_none() {
+                if rak.public_key().is_none() || rak.quote().is_none() {
                     return vec![];
                 }
 
-                let rak_pub = rak.public_key().expect("rak is configured");
-                let avr = rak.avr().expect("avr is configured");
-                let rak_binding = RAKBinding {
-                    avr: (*avr).clone(),
+                let rak_pub = rak.public_key().expect("RAK is configured");
+                let quote = rak.quote().expect("quote is configured");
+
+                let mut rak_binding = RAKBinding {
                     rak_pub,
                     binding: rak
                         .sign(&RAK_SESSION_BINDING_CONTEXT, &self.local_static_pub)
                         .unwrap(),
+                    ..Default::default()
                 };
+
+                // TODO: Change this once all runtimes have migrated to the new scheme.
+                if let Quote::Ias(ref avr) = *quote {
+                    rak_binding.deprecated_avr = Some(avr.clone());
+                } else {
+                    rak_binding.quote = Some((*quote).clone());
+                }
 
                 cbor::to_vec(rak_binding)
             }
@@ -208,17 +216,17 @@ impl Session {
         }
 
         let rak_binding: RAKBinding = cbor::from_slice(rak_binding)?;
-        let authenticated_avr = ias::verify(&rak_binding.avr)?;
+        let verified_quote = rak_binding.verify_quote()?;
 
         // Verify MRENCLAVE/MRSIGNER.
         if let Some(ref remote_enclaves) = self.remote_enclaves {
-            if !remote_enclaves.contains(&authenticated_avr.identity) {
+            if !remote_enclaves.contains(&verified_quote.identity) {
                 return Err(SessionError::MismatchedEnclaveIdentity.into());
             }
         }
 
         // Verify RAK binding.
-        RAK::verify_binding(&authenticated_avr, &rak_binding.rak_pub)?;
+        RAK::verify_binding(&verified_quote, &rak_binding.rak_pub)?;
 
         // Verify remote static key binding.
         rak_binding.binding.verify(
@@ -229,7 +237,7 @@ impl Session {
 
         Ok(Some(Arc::new(SessionInfo {
             rak_binding,
-            authenticated_avr,
+            verified_quote,
         })))
     }
 
@@ -262,9 +270,27 @@ impl Session {
 ///   public key to RAK.
 #[derive(Clone, Default, cbor::Encode, cbor::Decode)]
 pub struct RAKBinding {
-    pub avr: ias::AVR,
     pub rak_pub: PublicKey,
     pub binding: Signature,
+
+    // TODO: Make required once all runtimes have migrated to the new scheme.
+    #[cbor(optional)]
+    pub quote: Option<Quote>,
+
+    // TODO: Remove once all runtimes have migrated to the new scheme.
+    #[cbor(optional, rename = "avr")]
+    pub deprecated_avr: Option<ias::AVR>,
+}
+
+impl RAKBinding {
+    /// Verify the quote that is part of the RAK binding.
+    pub fn verify_quote(&self) -> Result<VerifiedQuote> {
+        match (self.quote.as_ref(), self.deprecated_avr.as_ref()) {
+            (Some(quote), None) => quote.verify(),
+            (None, Some(avr)) => ias::verify(avr),
+            _ => Err(anyhow::anyhow!("malformed RAK binding")),
+        }
+    }
 }
 
 /// Session builder.

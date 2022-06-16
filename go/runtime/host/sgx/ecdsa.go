@@ -8,6 +8,7 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common"
 	"github.com/oasisprotocol/oasis-core/go/common/sgx/aesm"
 	"github.com/oasisprotocol/oasis-core/go/common/sgx/pcs"
+	sgxQuote "github.com/oasisprotocol/oasis-core/go/common/sgx/quote"
 	"github.com/oasisprotocol/oasis-core/go/runtime/host/protocol"
 )
 
@@ -103,7 +104,23 @@ func (ec *teeStateECDSA) Update(ctx context.Context, sp *sgxProvisioner, conn pr
 		return nil, fmt.Errorf("TCB is not up to date (likely needs upgrade): %s", tcbLevel.Status)
 	}
 
-	// TODO: Call the runtime with the quote and TCB bundle.
+	// Call the runtime with the quote and TCB bundle.
+	_, err = conn.Call(
+		ctx,
+		&protocol.Body{
+			RuntimeCapabilityTEERakQuoteRequest: &protocol.RuntimeCapabilityTEERakQuoteRequest{
+				Quote: sgxQuote.Quote{
+					PCS: &pcs.QuoteBundle{
+						Quote: rawQuote,
+						TCB:   *tcbBundle,
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error while configuring quote: %w", err)
+	}
 
-	return nil, fmt.Errorf("ECDSA attestation not yet implemented (quote: %X)", rawQuote)
+	return nil, fmt.Errorf("ECDSA attestation not yet fully implemented (quote: %X)", rawQuote)
 }

@@ -5,8 +5,12 @@ pub mod ias;
 pub mod pcs;
 pub mod seal;
 
+use anyhow::Result;
+use chrono::prelude::*;
 #[cfg(target_env = "sgx")]
 use sgx_isa::Report;
+
+use crate::common::time::insecure_posix_time;
 
 impl_bytes!(MrEnclave, 32, "Enclave hash (MRENCLAVE).");
 impl_bytes!(MrSigner, 32, "Enclave signer hash (MRSIGNER).");
@@ -41,6 +45,29 @@ impl EnclaveIdentity {
             mr_signer: MrSigner::from(
                 "9affcfae47b848ec2caf1c49b4b283531e1cc425f93582b36806e52a43d78d1a",
             ),
+        }
+    }
+}
+
+/// An unverified SGX remote attestation quote, depending on the attestation scheme.
+#[derive(Clone, Debug, cbor::Encode, cbor::Decode)]
+pub enum Quote {
+    #[cbor(rename = "ias")]
+    Ias(ias::AVR),
+
+    #[cbor(rename = "pcs")]
+    Pcs(pcs::QuoteBundle),
+}
+
+impl Quote {
+    /// Verify the remote attestation quote.
+    pub fn verify(&self) -> Result<VerifiedQuote> {
+        match self {
+            Quote::Ias(avr) => ias::verify(avr),
+            Quote::Pcs(qb) => {
+                let now = Utc.timestamp(insecure_posix_time(), 0);
+                Ok(qb.verify(now)?)
+            }
         }
     }
 }

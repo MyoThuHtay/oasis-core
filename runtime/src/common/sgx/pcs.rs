@@ -832,7 +832,7 @@ mod tests {
             },
         };
 
-        let now = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1652701082, 0), Utc);
+        let now = Utc.timestamp(1652701082, 0);
 
         let verified_quote = qb.verify(now).unwrap();
         assert_eq!(
@@ -852,7 +852,7 @@ mod tests {
 
         let qb: QuoteBundle = cbor::from_slice(RAW_QUOTE_BUNDLE).unwrap();
 
-        let now = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1652701082, 0), Utc);
+        let now = Utc.timestamp(1652701082, 0);
 
         let verified_quote = qb.verify(now).unwrap();
         assert_eq!(

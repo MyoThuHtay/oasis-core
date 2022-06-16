@@ -14,6 +14,8 @@ use io_context::Context;
 use slog::{error, info, warn, Logger};
 use thiserror::Error;
 
+#[cfg(target_env = "sgx")]
+use crate::common::sgx::Quote;
 use crate::{
     common::{
         crypto::signature::PublicKey, logger::get_logger, namespace::Namespace, version::Version,
@@ -378,12 +380,22 @@ impl Protocol {
             }
             #[cfg(target_env = "sgx")]
             Body::RuntimeCapabilityTEERakAvrRequest { avr } => {
+                // TODO: Remove this once we want to break the runtime host protocol.
                 info!(
                     self.logger,
-                    "Configuring AVR for the runtime attestation key binding"
+                    "Configuring quote for the runtime attestation key binding"
                 );
-                self.rak.set_avr(avr)?;
+                self.rak.set_quote(Quote::Ias(avr))?;
                 Ok(Some(Body::RuntimeCapabilityTEERakAvrResponse {}))
+            }
+            #[cfg(target_env = "sgx")]
+            Body::RuntimeCapabilityTEERakQuoteRequest { quote } => {
+                info!(
+                    self.logger,
+                    "Configuring quote for the runtime attestation key binding"
+                );
+                self.rak.set_quote(quote)?;
+                Ok(Some(Body::RuntimeCapabilityTEERakQuoteResponse {}))
             }
             Body::RuntimeRPCCallRequest { .. }
             | Body::RuntimeLocalRPCCallRequest { .. }
@@ -479,7 +491,7 @@ impl Protocol {
 
         #[cfg(target_env = "sgx")]
         {
-            if self.rak.avr().is_none() {
+            if self.rak.quote().is_none() {
                 return Err(ProtocolError::AttestationRequired.into());
             }
         }
