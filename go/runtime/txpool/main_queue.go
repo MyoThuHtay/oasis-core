@@ -2,6 +2,7 @@ package txpool
 
 import (
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/hash"
+	"github.com/oasisprotocol/oasis-core/go/common/logging"
 	"github.com/oasisprotocol/oasis-core/go/runtime/host/protocol"
 )
 
@@ -82,6 +83,7 @@ func (mq *mainQueue) OfferChecked(tx *TxQueueMeta, meta *protocol.CheckTxMetadat
 		txMeta.sender = string(meta.Sender)
 		txMeta.senderSeq = meta.SenderSeq
 	}
+	logging.GetLogger("runtime/txpool/main_queue").Info("spinach: OfferChecked", "tx_meta", txMeta)
 	return mq.inner.add(txMeta)
 }
 
