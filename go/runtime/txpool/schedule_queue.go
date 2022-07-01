@@ -7,7 +7,6 @@ import (
 	"github.com/google/btree"
 
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/hash"
-	"github.com/oasisprotocol/oasis-core/go/common/logging"
 )
 
 var (
@@ -49,15 +48,16 @@ func (sq *scheduleQueue) add(tx *Transaction) error {
 	// If a transaction from the same sender already exists, we accept a new transaction only if it
 	// has a higher priority.
 	if etx, exists := sq.bySender[tx.sender]; exists {
-		if tx.priority <= etx.priority {
-			logging.GetLogger("runtime/txpool/schedule_queue").Info("spinach: ErrReplacementTxPriorityTooLow",
-				"tx_hash", tx.hash,
-				"tx_priority", tx.priority,
-				"etx_hash", etx.hash,
-				"etx_priority", etx.priority,
-			)
-			return ErrReplacementTxPriorityTooLow
-		}
+		// Whatever, let people replace their transactions.
+		// if tx.priority <= etx.priority {
+		// 	logging.GetLogger("runtime/txpool/schedule_queue").Info("spinach: ErrReplacementTxPriorityTooLow",
+		// 		"tx_hash", tx.hash,
+		// 		"tx_priority", tx.priority,
+		// 		"etx_hash", etx.hash,
+		// 		"etx_priority", etx.priority,
+		// 	)
+		// 	return ErrReplacementTxPriorityTooLow
+		// }
 
 		// Remove any existing transaction.
 		sq.removeLocked(etx)
