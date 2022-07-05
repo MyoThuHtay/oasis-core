@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::common::crypto::hash::Hash;
 use crate::common::{
     crypto::signature::{PrivateKey, PublicKey, Signature, Signer},
-    sgx::{ias, EnclaveIdentity, Quote, VerifiedQuote},
+    sgx::{EnclaveIdentity, Quote, QuotePolicy, VerifiedQuote},
     time::insecure_posix_time,
 };
 
@@ -53,6 +53,7 @@ struct Inner {
     private_key: Option<PrivateKey>,
     quote: Option<Arc<Quote>>,
     quote_timestamp: Option<i64>,
+    quote_policy: Option<QuotePolicy>,
     #[allow(unused)]
     enclave_identity: Option<EnclaveIdentity>,
     #[allow(unused)]
@@ -65,8 +66,8 @@ struct Inner {
 ///
 /// The runtime attestation key (RAK) represents the identity of the enclave
 /// and can be used to sign remote attestations. Its purpose is to avoid
-/// round trips to IAS for each verification as the verifier can instead
-/// verify the RAK signature and the signature on the provided AVR which
+/// round trips to IAS/PCS for each verification as the verifier can instead
+/// verify the RAK signature and the signature on the provided quote which binds
 /// RAK to the enclave.
 pub struct RAK {
     inner: RwLock<Inner>,
@@ -80,6 +81,7 @@ impl Default for RAK {
                 private_key: None,
                 quote: None,
                 quote_timestamp: None,
+                quote_policy: None,
                 enclave_identity: EnclaveIdentity::current(),
                 target_info: None,
                 nonce: None,
@@ -97,7 +99,7 @@ impl RAK {
         Hash::digest_bytes(&message)
     }
 
-    /// Generate a random 32 character nonce, for IAS anti-replay.
+    /// Generate a random 32 character nonce, for anti-replay.
     #[cfg(target_env = "sgx")]
     fn generate_nonce() -> String {
         // Note: The IAS protocol specifies this as 32 characters, and
@@ -175,7 +177,7 @@ impl RAK {
 
     /// Configure the remote attestation quote for RAK.
     #[cfg(target_env = "sgx")]
-    pub(crate) fn set_quote(&self, quote: Quote) -> Result<()> {
+    pub(crate) fn set_quote(&self, quote: Quote, policy: QuotePolicy) -> Result<()> {
         let rak_pub = self.public_key().expect("RAK must be configured");
 
         let mut inner = self.inner.write().unwrap();
@@ -229,6 +231,7 @@ impl RAK {
 
         inner.quote = Some(Arc::new(quote));
         inner.quote_timestamp = Some(verified_quote.timestamp);
+        inner.quote_policy = Some(policy);
         Ok(())
     }
 
@@ -251,11 +254,15 @@ impl RAK {
         // Enforce quote expiration.
         let mut inner = self.inner.write().unwrap();
         if inner.quote.is_some() {
+            let quote = inner.quote.as_ref().unwrap();
             let timestamp = inner.quote_timestamp.unwrap();
-            if !ias::timestamp_is_fresh(now, timestamp) {
+            let quote_policy = inner.quote_policy.as_ref().unwrap();
+
+            if !quote.is_fresh(now, timestamp, quote_policy) {
                 // Reset the quote.
                 inner.quote = None;
                 inner.quote_timestamp = None;
+                inner.quote_policy = None;
 
                 return None;
             }
@@ -278,12 +285,12 @@ impl RAK {
 }
 
 impl Signer for RAK {
-    /// Generate a RAK signature with the private key over the context and message.
     fn sign(&self, context: &[u8], message: &[u8]) -> Result<Signature> {
         let inner = self.inner.read().unwrap();
-        match inner.private_key {
-            Some(ref key) => Ok(key.sign(context, message)?),
-            None => Err(RAKError::NotConfigured.into()),
-        }
+        inner
+            .private_key
+            .as_ref()
+            .ok_or(RAKError::NotConfigured)?
+            .sign(context, message)
     }
 }

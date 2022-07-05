@@ -21,6 +21,14 @@ const (
 	offsetReportReportData = 320
 )
 
+// QuotePolicy is the quote validity policy.
+type QuotePolicy struct {
+	// AllowedQuoteStatuses are the allowed quote statuses.
+	//
+	// Note: QuoteOK and QuoteSwHardeningNeeded are ALWAYS allowed, and do not need to be specified.
+	AllowedQuoteStatuses []ISVEnclaveQuoteStatus `json:"allowed_quote_statuses,omitempty"`
+}
+
 // SignatureType is the type of signature accommpanying an enclave quote.
 type SignatureType int
 

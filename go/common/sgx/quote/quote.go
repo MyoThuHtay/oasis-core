@@ -10,3 +10,9 @@ type Quote struct {
 	IAS *ias.AVRBundle   `json:"ias,omitempty"`
 	PCS *pcs.QuoteBundle `json:"pcs,omitempty"`
 }
+
+// QuotePolicy is the quote validity policy.
+type QuotePolicy struct {
+	IAS *ias.QuotePolicy `json:"ias,omitempty"`
+	PCS *pcs.QuotePolicy `json:"pcs,omitempty"`
+}

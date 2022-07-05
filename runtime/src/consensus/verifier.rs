@@ -20,6 +20,9 @@ pub enum Error {
     #[error("trust root loading failed")]
     TrustRootLoadingFailed,
 
+    #[error("no trust root")]
+    NoTrustRoot,
+
     #[error("internal error")]
     Internal,
 }
@@ -64,6 +67,9 @@ pub trait Verifier: Send + Sync {
     /// performing any verification. This method should only be used for operations that do not
     /// require integrity guarantees.
     fn unverified_state(&self, consensus_block: LightBlock) -> Result<ConsensusState, Error>;
+
+    /// Return the latest verified consensus layer state.
+    fn latest_state(&self) -> Result<ConsensusState, Error>;
 
     /// Record the given (locally computed and thus verified) results header as trusted.
     fn trust(&self, header: &ComputeResultsHeader) -> Result<(), Error>;

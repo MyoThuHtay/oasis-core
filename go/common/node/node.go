@@ -1,10 +1,7 @@
 // Package node implements common node identity routines.
-//
-// This package is meant for interoperability with the rust compute worker.
 package node
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -489,37 +486,6 @@ type CapabilityTEE struct {
 	Attestation []byte `json:"attestation"`
 }
 
-// SGXConstraints are the Intel SGX TEE constraints.
-type SGXConstraints struct {
-	// Enclaves is the allowed MRENCLAVE/MRSIGNER pairs.
-	Enclaves []sgx.EnclaveIdentity `json:"enclaves,omitempty"`
-
-	// AllowedQuoteStatuses are the allowed quote statuses for the node
-	// to be scheduled as a compute worker.
-	//
-	// Note: QuoteOK and QuoteSwHardeningNeeded are ALWAYS allowed, and do not need to be specified.
-	AllowedQuoteStatuses []ias.ISVEnclaveQuoteStatus `json:"allowed_quote_statuses,omitempty"`
-}
-
-func (constraints *SGXConstraints) quoteStatusAllowed(avr *ias.AttestationVerificationReport) bool {
-	status := avr.ISVEnclaveQuoteStatus
-
-	// Always allow "OK" and "SW_HARDENING_NEEDED".
-	if status == ias.QuoteOK || status == ias.QuoteSwHardeningNeeded {
-		return true
-	}
-
-	// Search through the constraints to see if the AVR quote status is
-	// explicitly allowed.
-	for _, v := range constraints.AllowedQuoteStatuses {
-		if v == status {
-			return true
-		}
-	}
-
-	return false
-}
-
 // RAKHash computes the expected AVR report hash bound to a given public RAK.
 func RAKHash(rak signature.PublicKey) hash.Hash {
 	hData := make([]byte, 0, len(teeHashContext)+signature.PublicKeySize)
@@ -529,7 +495,7 @@ func RAKHash(rak signature.PublicKey) hash.Hash {
 }
 
 // Verify verifies the node's TEE capabilities, at the provided timestamp.
-func (c *CapabilityTEE) Verify(ts time.Time, constraints []byte) error {
+func (c *CapabilityTEE) Verify(teeCfg *TEEFeatures, ts time.Time, constraints []byte) error {
 	rakHash := RAKHash(c.RAK)
 
 	switch c.Hardware {
@@ -550,22 +516,22 @@ func (c *CapabilityTEE) Verify(ts time.Time, constraints []byte) error {
 			return err
 		}
 
+		// TODO: Version Attestation field and specify:
+		// - v0 is just an ias.AVRBundle
+		// - v1 is the new Quote structure
+		//
+		// Add common VerifiedQuote structure as in Rust.
+
 		// Ensure that the MRENCLAVE/MRSIGNER match what is specified
 		// in the TEE-specific constraints field.
 		var cs SGXConstraints
 		if err := cbor.Unmarshal(constraints, &cs); err != nil {
 			return fmt.Errorf("node: malformed SGX constraints: %w", err)
 		}
-		var eidValid bool
-		for _, eid := range cs.Enclaves {
-			eidMrenclave := eid.MrEnclave
-			eidMrsigner := eid.MrSigner
-			if bytes.Equal(eidMrenclave[:], q.Report.MRENCLAVE[:]) && bytes.Equal(eidMrsigner[:], q.Report.MRSIGNER[:]) {
-				eidValid = true
-				break
-			}
+		if err := cs.ValidateBasic(teeCfg); err != nil {
+			return fmt.Errorf("node: malformed SGX constraints: %w", err)
 		}
-		if !eidValid {
+		if !cs.ContainsEnclave(sgx.EnclaveIdentity{MrEnclave: q.Report.MRENCLAVE, MrSigner: q.Report.MRSIGNER}) {
 			return ErrBadEnclaveIdentity
 		}
 
@@ -578,6 +544,7 @@ func (c *CapabilityTEE) Verify(ts time.Time, constraints []byte) error {
 		}
 
 		// Ensure that the quote status is acceptable.
+		// TODO: Move this to quote verification.
 		if !cs.quoteStatusAllowed(avr) {
 			return ErrConstraintViolation
 		}

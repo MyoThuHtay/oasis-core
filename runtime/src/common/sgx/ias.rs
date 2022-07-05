@@ -115,6 +115,17 @@ lazy_static! {
     };
 }
 
+/// Quote validity policy.
+#[derive(Clone, Debug, Default, cbor::Encode, cbor::Decode)]
+pub struct QuotePolicy {
+    /// Allowed quote statuses.
+    ///
+    /// Note: QuoteOK and QuoteSwHardeningNeeded are ALWAYS allowed, and do not need to be
+    /// specified.
+    #[cbor(optional)]
+    pub allowed_quote_statuses: Vec<i64>, // TODO: Define ISVEnclaveQuoteStatus type.
+}
+
 /// Decoded quote body.
 #[derive(Default, Debug)]
 struct QuoteBody {

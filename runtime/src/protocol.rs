@@ -14,8 +14,6 @@ use io_context::Context;
 use slog::{error, info, warn, Logger};
 use thiserror::Error;
 
-#[cfg(target_env = "sgx")]
-use crate::common::sgx::Quote;
 use crate::{
     common::{
         crypto::signature::PublicKey, logger::get_logger, namespace::Namespace, version::Version,
@@ -339,6 +337,7 @@ impl Protocol {
         request: Body,
     ) -> anyhow::Result<Option<Body>> {
         match request {
+            // Connection setup and various requests.
             Body::RuntimeInfoRequest(request) => Ok(Some(Body::RuntimeInfoResponse(
                 self.initialize_guest(request)?,
             ))),
@@ -354,49 +353,18 @@ impl Protocol {
                 info!(self.logger, "Handled worker abort request");
                 Ok(Some(Body::RuntimeAbortResponse {}))
             }
-            #[cfg(target_env = "sgx")]
-            Body::RuntimeCapabilityTEERakInitRequest { target_info } => {
-                info!(self.logger, "Initializing the runtime attestation key");
-                self.rak.init_rak(target_info)?;
-                Ok(Some(Body::RuntimeCapabilityTEERakInitResponse {}))
-            }
-            #[cfg(target_env = "sgx")]
-            Body::RuntimeCapabilityTEERakReportRequest {} => {
-                // Initialize the RAK report (for attestation).
-                info!(
-                    self.logger,
-                    "Initializing the runtime attestation key report"
-                );
-                let (rak_pub, report, nonce) = self.rak.init_report();
 
-                let report: &[u8] = report.as_ref();
-                let report = report.to_vec();
+            // Attestation-related requests.
+            #[cfg(target_env = "sgx")]
+            Body::RuntimeCapabilityTEERakInitRequest { .. }
+            | Body::RuntimeCapabilityTEERakReportRequest {}
+            | Body::RuntimeCapabilityTEERakAvrRequest { .. }
+            | Body::RuntimeCapabilityTEERakQuoteRequest { .. } => {
+                self.dispatcher.queue_request(ctx, id, request)?;
+                Ok(None)
+            }
 
-                Ok(Some(Body::RuntimeCapabilityTEERakReportResponse {
-                    rak_pub,
-                    report,
-                    nonce,
-                }))
-            }
-            #[cfg(target_env = "sgx")]
-            Body::RuntimeCapabilityTEERakAvrRequest { avr } => {
-                // TODO: Remove this once we want to break the runtime host protocol.
-                info!(
-                    self.logger,
-                    "Configuring quote for the runtime attestation key binding"
-                );
-                self.rak.set_quote(Quote::Ias(avr))?;
-                Ok(Some(Body::RuntimeCapabilityTEERakAvrResponse {}))
-            }
-            #[cfg(target_env = "sgx")]
-            Body::RuntimeCapabilityTEERakQuoteRequest { quote } => {
-                info!(
-                    self.logger,
-                    "Configuring quote for the runtime attestation key binding"
-                );
-                self.rak.set_quote(quote)?;
-                Ok(Some(Body::RuntimeCapabilityTEERakQuoteResponse {}))
-            }
+            // Other requests.
             Body::RuntimeRPCCallRequest { .. }
             | Body::RuntimeLocalRPCCallRequest { .. }
             | Body::RuntimeCheckTxBatchRequest { .. }
@@ -408,6 +376,7 @@ impl Protocol {
                 self.dispatcher.queue_request(ctx, id, request)?;
                 Ok(None)
             }
+
             _ => {
                 warn!(self.logger, "Received unsupported request"; "req" => format!("{:?}", request));
                 Err(ProtocolError::MethodNotSupported.into())

@@ -33,6 +33,16 @@ const (
 	ppidDataLen = 404
 )
 
+// QuotePolicy is the quote validity policy.
+type QuotePolicy struct {
+	// TCBValidityPeriod is the validity (in days) of the TCB collateral.
+	TCBValidityPeriod uint16 `json:"tcb_validity_period"`
+
+	// MinTCBEvaluationDataNumber is the minimum TCB evaluation data number that is considered to be
+	// valid. TCB bundles containing smaller values will be invalid.
+	MinTCBEvaluationDataNumber uint32 `json:"min_tcb_evaluation_data_number"`
+}
+
 // Quote is an enclave quote.
 type Quote struct {
 	Header    QuoteHeader

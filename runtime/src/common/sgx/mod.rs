@@ -62,12 +62,47 @@ pub enum Quote {
 impl Quote {
     /// Verify the remote attestation quote.
     pub fn verify(&self) -> Result<VerifiedQuote> {
+        // TODO: Add QuotePolicy argument.
         match self {
             Quote::Ias(avr) => ias::verify(avr),
             Quote::Pcs(qb) => {
                 let now = Utc.timestamp(insecure_posix_time(), 0);
                 Ok(qb.verify(now)?)
             }
+        }
+    }
+
+    /// Whether the quote is considered fresh.
+    pub fn is_fresh(&self, now: i64, ts: i64, policy: &QuotePolicy) -> bool {
+        match (self, policy) {
+            (Quote::Ias(_), QuotePolicy::Ias(_)) => ias::timestamp_is_fresh(now, ts),
+            (Quote::Pcs(_), QuotePolicy::Pcs(qp)) => qp.is_fresh(now, ts),
+            _ => false,
+        }
+    }
+}
+
+/// Quote validity policy.
+#[derive(Clone, Debug, cbor::Encode, cbor::Decode)]
+pub enum QuotePolicy {
+    #[cbor(rename = "ias")]
+    Ias(ias::QuotePolicy),
+
+    #[cbor(rename = "pcs")]
+    Pcs(pcs::QuotePolicy),
+}
+
+impl QuotePolicy {
+    /// Return a sane default policy for the given quote type.
+    pub fn default_for(quote: &Quote) -> Self {
+        match quote {
+            Quote::Ias(_) => QuotePolicy::Ias(ias::QuotePolicy {
+                allowed_quote_statuses: vec![],
+            }),
+            Quote::Pcs(_) => QuotePolicy::Pcs(pcs::QuotePolicy {
+                tcb_validity_period: 30,
+                min_tcb_evaluation_data_number: 1,
+            }),
         }
     }
 }

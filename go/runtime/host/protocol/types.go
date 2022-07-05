@@ -206,6 +206,7 @@ type RuntimeCapabilityTEERakAvrRequest struct {
 
 // RuntimeCapabilityTEERakQuoteRequest is a worker RFC 0009 CapabilityTEE RAK quote setup request message body.
 type RuntimeCapabilityTEERakQuoteRequest struct {
+	// Quote is the remote attestation quote.
 	Quote quote.Quote `json:"quote"`
 }
 

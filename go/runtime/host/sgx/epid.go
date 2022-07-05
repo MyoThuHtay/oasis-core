@@ -8,6 +8,7 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common"
 	"github.com/oasisprotocol/oasis-core/go/common/cbor"
 	cmnIAS "github.com/oasisprotocol/oasis-core/go/common/sgx/ias"
+	sgxQuote "github.com/oasisprotocol/oasis-core/go/common/sgx/quote"
 	ias "github.com/oasisprotocol/oasis-core/go/ias/api"
 	"github.com/oasisprotocol/oasis-core/go/runtime/host/protocol"
 )
@@ -76,8 +77,10 @@ func (ep *teeStateEPID) Update(ctx context.Context, sp *sgxProvisioner, conn pro
 	_, err = conn.Call(
 		ctx,
 		&protocol.Body{
-			RuntimeCapabilityTEERakAvrRequest: &protocol.RuntimeCapabilityTEERakAvrRequest{
-				AVR: *avrBundle,
+			RuntimeCapabilityTEERakQuoteRequest: &protocol.RuntimeCapabilityTEERakQuoteRequest{
+				Quote: sgxQuote.Quote{
+					IAS: avrBundle,
+				},
 			},
 		},
 	)

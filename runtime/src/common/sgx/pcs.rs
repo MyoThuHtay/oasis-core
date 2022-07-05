@@ -89,6 +89,23 @@ pub enum Error {
     ProductionEnclave,
 }
 
+/// Quote validity policy.
+#[derive(Clone, Debug, Default, cbor::Encode, cbor::Decode)]
+pub struct QuotePolicy {
+    /// Validity (in days) of the TCB collateral.
+    pub tcb_validity_period: u16,
+    /// Minimum TCB evaluation data number that is considered to be valid. TCB bundles containing
+    /// smaller values will be invalid.
+    pub min_tcb_evaluation_data_number: u32,
+}
+
+impl QuotePolicy {
+    /// Whether the quote with timestamp `ts` should be considered fresh.
+    pub fn is_fresh(&self, now: i64, ts: i64) -> bool {
+        (now - ts).abs() < 60 * 60 * (self.tcb_validity_period as i64)
+    }
+}
+
 /// An attestation quote together with the TCB bundle required for its verification.
 #[derive(Clone, Debug, Default, cbor::Encode, cbor::Decode)]
 pub struct QuoteBundle {
@@ -126,10 +143,12 @@ impl QuoteBundle {
         let tcb_info = self.tcb.tcb_info.open(ts, tcb_cert.public_key_mut())?;
         let qe_identity = self.tcb.qe_identity.open(ts, tcb_cert.public_key_mut())?;
 
+        // We use the TCB info issue date as the timestamp.
         let timestamp = Utc
             .datetime_from_str(&tcb_info.issue_date, PCS_TS_FMT)
             .map_err(|err| Error::TCBParseError(err.into()))?
             .timestamp();
+        // TODO: Apply quote policy.
 
         // Perform quote verification.
         let mut verifier = Verifier {
