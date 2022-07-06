@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/oasisprotocol/oasis-core/go/common"
+	"github.com/oasisprotocol/oasis-core/go/common/pubsub"
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
 )
 
@@ -28,6 +29,16 @@ type BlockHistory interface {
 	// This method can only be called once all roothash blocks for consensus
 	// heights <= height have been committed using Commit.
 	ConsensusCheckpoint(height int64) error
+
+	// StorageSyncCheckpoint records the last storage round which was synced
+	// to runtime storage.
+	StorageSyncCheckpoint(round uint64) error
+
+	// LastStorageSyncedRound returns the last runtime round which was synced to storage.
+	LastStorageSyncedRound() (uint64, error)
+
+	// WatchStorageSyncRounds returns a channel watching storage sync rounds as they are synced.
+	WatchStorageSyncRounds() (<-chan uint64, pubsub.ClosableSubscription, error)
 
 	// LastConsensusHeight returns the last consensus height which was seen
 	// by block history.

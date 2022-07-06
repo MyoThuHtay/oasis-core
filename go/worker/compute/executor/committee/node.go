@@ -978,6 +978,33 @@ func (n *Node) startProcessingBatchLocked(batch *unresolvedBatch) {
 		return
 	}
 
+	// Ensure block round is synced to storage
+	blk := n.commonNode.CurrentBlock
+	lastSyncCh, sub, err := n.commonNode.Runtime.History().WatchStorageSyncRounds()
+	if err != nil {
+		n.logger.Error("failed to watch storage sync rounds", "err", err)
+		return
+	}
+	defer sub.Close()
+
+	n.logger.Debug("ensuring block round is synced to storage")
+OUTER:
+	for {
+		select {
+		case round, ok := <-lastSyncCh:
+			if !ok {
+				return
+			}
+
+			n.logger.Debug("ensuring block round is synced to storage", "round", round)
+			if round >= blk.Header.Round {
+				break OUTER
+			}
+		case <-n.roundCtx.Done():
+			return
+		}
+	}
+
 	n.logger.Debug("processing batch",
 		"batch_size", len(resolvedBatch),
 	)
@@ -1000,7 +1027,6 @@ func (n *Node) startProcessingBatchLocked(batch *unresolvedBatch) {
 
 	// Request the worker host to process a batch. This is done in a separate
 	// goroutine so that the committee node can continue processing blocks.
-	blk := n.commonNode.CurrentBlock
 	consensusBlk := n.commonNode.CurrentConsensusBlock
 	height := n.commonNode.CurrentBlockHeight
 	epoch := n.commonNode.CurrentEpoch

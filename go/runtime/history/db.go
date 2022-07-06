@@ -41,6 +41,10 @@ type dbMetadata struct {
 	LastConsensusHeight int64 `json:"last_consensus_height"`
 	// LastRound is the last round.
 	LastRound uint64 `json:"last_round"`
+	// LastStorageSyncRound is the last storage synced runtime round.
+	LastStorageSyncRound uint64 `json:"last_storage_sync_round"`
+	// StorageSyncEnabled is set if storage sync is enabled on this node.
+	StorageSyncEnabled bool `json:"storage_sync_enabled"`
 }
 
 // DB is the history database.
@@ -158,6 +162,26 @@ func (d *DB) consensusCheckpoint(height int64) error {
 		}
 
 		meta.LastConsensusHeight = height
+		return tx.Set(metadataKeyFmt.Encode(), cbor.Marshal(meta))
+	})
+}
+
+func (d *DB) storageSyncCheckpoint(round uint64) error {
+	return d.db.Update(func(tx *badger.Txn) error {
+		meta, err := d.queryGetMetadata(tx)
+		if err != nil {
+			return err
+		}
+		meta.StorageSyncEnabled = true
+
+		if round < meta.LastStorageSyncRound {
+			return fmt.Errorf("runtime/history: storage sync checkpoint at lower height (current: %d wanted: %d)",
+				meta.LastStorageSyncRound,
+				round,
+			)
+		}
+
+		meta.LastStorageSyncRound = round
 		return tx.Set(metadataKeyFmt.Encode(), cbor.Marshal(meta))
 	})
 }

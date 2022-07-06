@@ -569,11 +569,14 @@ func (n *Node) initGenesis(rt *registryApi.Runtime, genesisBlock *block.Block) e
 	return nil
 }
 
-func (n *Node) flushSyncedState(summary *blockSummary) uint64 {
+func (n *Node) flushSyncedState(summary *blockSummary) (uint64, error) {
 	n.syncedLock.Lock()
 	defer n.syncedLock.Unlock()
 
 	n.syncedState = *summary
+	if err := n.commonNode.Runtime.History().StorageSyncCheckpoint(n.syncedState.Round); err != nil {
+		return 0, err
+	}
 
 	// Wake up any round waiters.
 	filtered := make([]roundWaiter, 0, len(n.roundWaiters))
@@ -587,7 +590,7 @@ func (n *Node) flushSyncedState(summary *blockSummary) uint64 {
 	}
 	n.roundWaiters = filtered
 
-	return n.syncedState.Round
+	return n.syncedState.Round, nil
 }
 
 func (n *Node) watchQuit() {
@@ -789,7 +792,10 @@ func (n *Node) worker() { // nolint: gocyclo
 		switch err {
 		case nil:
 			// Set last synced version to last finalized storage version.
-			n.flushSyncedState(summaryFromBlock(blk))
+			if _, err = n.flushSyncedState(summaryFromBlock(blk)); err != nil {
+				n.logger.Error("failed to flush synced state", "err", err)
+				return
+			}
 		default:
 			// Failed to fetch historic block. This is fine when the network just went through a
 			// dump/restore upgrade and we don't have any information before genesis. We treat the
@@ -911,7 +917,13 @@ func (n *Node) worker() { // nolint: gocyclo
 						return
 					}
 				}
-				cachedLastRound = n.flushSyncedState(summaryFromBlock(earlyBlk))
+				cachedLastRound, err = n.flushSyncedState(summaryFromBlock(earlyBlk))
+				if err != nil {
+					n.logger.Error("failed to flush synced state",
+						"err", err,
+					)
+					return
+				}
 				// No need to force a checkpoint sync.
 				break SyncStartCheck
 			default:
@@ -997,7 +1009,13 @@ func (n *Node) worker() { // nolint: gocyclo
 		if err != nil {
 			n.logger.Info("checkpoint sync failed", "err", err)
 		} else {
-			cachedLastRound = n.flushSyncedState(summary)
+			cachedLastRound, err = n.flushSyncedState(summary)
+			if err != nil {
+				n.logger.Error("failed to flush synced state",
+					"err", err,
+				)
+				return
+			}
 			lastFullyAppliedRound = cachedLastRound
 			n.logger.Info("checkpoint sync succeeded",
 				logging.LogEvent, LogEventCheckpointSyncSuccess,
@@ -1250,7 +1268,12 @@ mainLoop:
 			if finalized.err == nil {
 				// No further sync or out of order handling needed here, since
 				// only one finalize at a time is triggered (for round cachedLastRound+1)
-				cachedLastRound = n.flushSyncedState(finalized.summary)
+				cachedLastRound, err = n.flushSyncedState(finalized.summary)
+				if err != nil {
+					n.logger.Error("failed to flush synced state",
+						"err", err,
+					)
+				}
 				storageWorkerLastFullRound.With(n.getMetricLabels()).Set(float64(finalized.summary.Round))
 
 				// Check if we're far enough to reasonably register as available.

@@ -132,7 +132,7 @@ func (w *Worker) registerRuntime(dataDir string, commonNode *committeeCommon.Nod
 	if err != nil {
 		return err
 	}
-	commonNode.Runtime.RegisterStorage(newSyncedLocalStorage(node, localStorage))
+	commonNode.Runtime.RegisterStorage(localStorage)
 	commonNode.AddHooks(node)
 	w.runtimes[id] = node
 

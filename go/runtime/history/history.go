@@ -11,6 +11,7 @@ import (
 
 	"github.com/oasisprotocol/oasis-core/go/common"
 	"github.com/oasisprotocol/oasis-core/go/common/logging"
+	"github.com/oasisprotocol/oasis-core/go/common/pubsub"
 	roothash "github.com/oasisprotocol/oasis-core/go/roothash/api"
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
 )
@@ -68,6 +69,18 @@ func (h *nopHistory) ConsensusCheckpoint(height int64) error {
 	return errNopHistory
 }
 
+func (h *nopHistory) StorageSyncCheckpoint(round uint64) error {
+	return errNopHistory
+}
+
+func (h *nopHistory) LastStorageSyncedRound() (uint64, error) {
+	return 0, errNopHistory
+}
+
+func (h *nopHistory) WatchStorageSyncRounds() (<-chan uint64, pubsub.ClosableSubscription, error) {
+	return nil, nil, errNopHistory
+}
+
 func (h *nopHistory) LastConsensusHeight() (int64, error) {
 	return 0, errNopHistory
 }
@@ -109,7 +122,8 @@ type runtimeHistory struct {
 	ctx       context.Context
 	cancelCtx context.CancelFunc
 
-	db *DB
+	db                        *DB
+	storageSyncRoundsNotifier *pubsub.Broker
 
 	pruner        Pruner
 	pruneInterval time.Duration
@@ -138,6 +152,33 @@ func (h *runtimeHistory) ConsensusCheckpoint(height int64) error {
 	return h.db.consensusCheckpoint(height)
 }
 
+func (h *runtimeHistory) StorageSyncCheckpoint(round uint64) error {
+	err := h.db.storageSyncCheckpoint(round)
+	if err != nil {
+		return err
+	}
+	h.storageSyncRoundsNotifier.Broadcast(round)
+
+	return nil
+}
+
+func (h *runtimeHistory) LastStorageSyncedRound() (uint64, error) {
+	meta, err := h.db.metadata()
+	if err != nil {
+		return 0, err
+	}
+
+	return meta.LastStorageSyncRound, nil
+}
+
+func (h *runtimeHistory) WatchStorageSyncRounds() (<-chan uint64, pubsub.ClosableSubscription, error) {
+	typedCh := make(chan uint64)
+	sub := h.storageSyncRoundsNotifier.Subscribe()
+	sub.Unwrap(typedCh)
+
+	return typedCh, sub, nil
+}
+
 func (h *runtimeHistory) LastConsensusHeight() (int64, error) {
 	meta, err := h.db.metadata()
 	if err != nil {
@@ -154,6 +195,10 @@ func (h *runtimeHistory) resolveRound(round uint64) (uint64, error) {
 		meta, err := h.db.metadata()
 		if err != nil {
 			return roothash.RoundInvalid, err
+		}
+		// Also take storage sync state into account.
+		if meta.StorageSyncEnabled && meta.LastStorageSyncRound < meta.LastRound {
+			return meta.LastStorageSyncRound, nil
 		}
 		return meta.LastRound, nil
 	default:
@@ -269,16 +314,17 @@ func New(dataDir string, runtimeID common.Namespace, cfg *Config) (History, erro
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	h := &runtimeHistory{
-		runtimeID:     runtimeID,
-		logger:        logging.GetLogger("roothash/history").With("runtime_id", runtimeID),
-		ctx:           ctx,
-		cancelCtx:     cancelCtx,
-		db:            db,
-		pruner:        pruner,
-		pruneInterval: cfg.PruneInterval,
-		pruneCh:       channels.NewRingChannel(1),
-		stopCh:        make(chan struct{}),
-		quitCh:        make(chan struct{}),
+		runtimeID:                 runtimeID,
+		logger:                    logging.GetLogger("roothash/history").With("runtime_id", runtimeID),
+		ctx:                       ctx,
+		cancelCtx:                 cancelCtx,
+		db:                        db,
+		storageSyncRoundsNotifier: pubsub.NewBroker(true),
+		pruner:                    pruner,
+		pruneInterval:             cfg.PruneInterval,
+		pruneCh:                   channels.NewRingChannel(1),
+		stopCh:                    make(chan struct{}),
+		quitCh:                    make(chan struct{}),
 	}
 	go h.pruneWorker()
 

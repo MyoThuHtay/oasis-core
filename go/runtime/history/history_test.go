@@ -37,6 +37,10 @@ func TestHistory(t *testing.T) {
 	require.NoError(err, "LastConsensusHeight")
 	require.EqualValues(0, lastHeight)
 
+	lastRound, err := history.LastStorageSyncedRound()
+	require.NoError(err, "LastStorageSyncedRound")
+	require.EqualValues(0, lastRound)
+
 	_, err = history.GetBlock(context.Background(), 10)
 	require.Error(err, "GetBlock should fail for non-indexed block")
 	require.Equal(roothash.ErrNotFound, err)
@@ -57,6 +61,25 @@ func TestHistory(t *testing.T) {
 	lastHeight, err = history.LastConsensusHeight()
 	require.NoError(err, "LastConsensusHeight")
 	require.EqualValues(42, lastHeight)
+
+	err = history.StorageSyncCheckpoint(52)
+	require.NoError(err, "StorageSyncCheckpoint")
+	err = history.StorageSyncCheckpoint(50)
+	require.Error(err, "StorageSyncCheckpoint should fail for lower height")
+
+	lastRound, err = history.LastStorageSyncedRound()
+	require.NoError(err, "LastStorageSyncedRound")
+	require.EqualValues(52, lastRound)
+
+	ch, sub, err := history.WatchStorageSyncRounds()
+	require.NoError(err)
+	defer sub.Close()
+	select {
+	case <-ch:
+		require.EqualValues(52, lastRound)
+	case <-time.After(recvTimeout):
+		t.Fatalf("failed to receive storage synced round")
+	}
 
 	blk := roothash.AnnotatedBlock{
 		Height: 40,
@@ -126,6 +149,10 @@ func TestHistory(t *testing.T) {
 	lastHeight, err = history.LastConsensusHeight()
 	require.NoError(err, "LastConsensusHeight")
 	require.EqualValues(50, lastHeight)
+
+	lastRound, err = history.LastStorageSyncedRound()
+	require.NoError(err, "LastStorageSyncedRound")
+	require.EqualValues(52, lastRound)
 
 	gotBlk, err = history.GetBlock(context.Background(), 10)
 	require.NoError(err, "GetBlock")
